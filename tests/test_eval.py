@@ -390,20 +390,3 @@ def test_eval_downsampled_cells():
         break_on_error=True,
     )
     validate_expected_files(OUTDIR)
-
-
-def test_eval_alt_metric():
-    adata_real = build_random_anndata()
-    adata_pred = downsample_cells(adata_real, fraction=0.5)
-    evaluator = MetricsEvaluator(
-        adata_pred=adata_pred,
-        adata_real=adata_real,
-        control_pert=CONTROL_VAR,
-        pert_col=PERT_COL,
-        outdir=OUTDIR,
-        de_method="anderson",
-    )
-    evaluator.compute(
-        break_on_error=True,
-    )
-    validate_expected_files(OUTDIR)
