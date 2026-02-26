@@ -125,7 +125,4 @@ def _cast_float16_to_float32(adata: ad.AnnData, which: str | None = None):
             logger.info(
                 f"Casting {which} anndata from float16 to float32 (NUMBA does not support float16)."
             )
-        if sp.issparse(x):
-            adata.X = x.astype(np.float32)
-        else:
-            adata.X = x.astype(np.float32)
+        adata.X = x.astype(np.float32)
