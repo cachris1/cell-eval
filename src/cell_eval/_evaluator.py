@@ -39,12 +39,8 @@ class MetricsEvaluator:
         Control perturbation name.
     pert_col: str = "target"
         Perturbation column name.
-    de_method: str = "wilcoxon"
-        Differential expression method.
     num_threads: int = -1
         Number of threads for parallel differential expression.
-    batch_size: int = 100
-        Batch size for parallel differential expression.
     outdir: str = "./cell-eval-outdir"
         Output directory.
     allow_discrete: bool = False
@@ -64,9 +60,7 @@ class MetricsEvaluator:
         de_real: pl.DataFrame | str | None = None,
         control_pert: str = "non-targeting",
         pert_col: str = "target",
-        de_method: str = "wilcoxon",
         num_threads: int = -1,
-        batch_size: int = 100,
         outdir: str = "./cell-eval-outdir",
         allow_discrete: bool = False,
         prefix: str | None = None,
