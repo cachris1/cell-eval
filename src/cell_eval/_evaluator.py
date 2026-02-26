@@ -168,6 +168,10 @@ def _build_anndata_pair(
         logger.info(f"Reading pred anndata from {pred}")
         pred = ad.read_h5ad(pred)
 
+    # Cast float16 to float32 since NUMBA (used by pdex) does not support float16
+    _cast_float16_to_float32(real, which="real")
+    _cast_float16_to_float32(pred, which="pred")
+
     # Validate that the input is normalized and log-transformed
     _convert_to_normlog(real, which="real", allow_discrete=allow_discrete)
     _convert_to_normlog(pred, which="pred", allow_discrete=allow_discrete)
@@ -176,6 +180,27 @@ def _build_anndata_pair(
     return PerturbationAnndataPair(
         real=real, pred=pred, control_pert=control_pert, pert_col=pert_col
     )
+
+
+def _cast_float16_to_float32(adata: ad.AnnData, which: str | None = None):
+    """Cast float16 expression matrix to float32 (inplace).
+
+    NUMBA (used by pdex) does not support float16 operations.
+    """
+    import numpy as np
+    import scipy.sparse as sp
+
+    x = adata.X
+    dtype = x.dtype if not sp.issparse(x) else x.data.dtype
+    if dtype == np.float16:
+        if which:
+            logger.info(
+                f"Casting {which} anndata from float16 to float32 (NUMBA does not support float16)."
+            )
+        if sp.issparse(x):
+            adata.X = x.astype(np.float32)
+        else:
+            adata.X = x.astype(np.float32)
 
 
 def _convert_to_normlog(
