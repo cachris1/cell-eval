@@ -5,7 +5,7 @@ import anndata as ad
 import numpy as np
 import polars as pl
 from numpy.typing import NDArray
-from pdex import parallel_differential_expression
+from pdex import pdex
 from scipy.sparse import issparse
 
 from ._evaluator import _build_pdex_kwargs, _convert_to_normlog
@@ -83,16 +83,15 @@ def build_base_mean_adata(
     if output_de_path is not None:
         logger.info("Calculating differential expression")
         pdex_kwargs = _build_pdex_kwargs(
-            groupby_key=pert_col,
+            groupby=pert_col,
             reference=control_pert,
-            num_workers=num_threads,
-            metric=de_method,
-            batch_size=batch_size,
+            threads=num_threads,
             allow_discrete=allow_discrete,
             pdex_kwargs=pdex_kwargs,
         )
-        frame = parallel_differential_expression(
+        frame = pdex(
             adata=baseline_adata,
+            mode="ref",
             **pdex_kwargs,
         )
         logger.info(f"Saving differential expression results to {output_de_path}")

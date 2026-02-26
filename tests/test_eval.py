@@ -265,7 +265,7 @@ def test_eval_pdex_kwargs():
         control_pert="control",
         pert_col="perturbation",
         pdex_kwargs={
-            "exp_post_agg": True,
+            "geometric_mean": False,
         },
     )
     evaluator.compute(
@@ -282,8 +282,8 @@ def test_eval_pdex_kwargs_duplicated():
         control_pert="control",
         pert_col="perturbation",
         pdex_kwargs={
-            "exp_post_agg": True,
-            "num_workers": 4,
+            "geometric_mean": False,
+            "threads": 4,
         },
     )
     evaluator.compute(
