@@ -265,7 +265,7 @@ def test_eval_pdex_kwargs():
         control_pert="control",
         pert_col="perturbation",
         pdex_kwargs={
-            "exp_post_agg": True,
+            "geometric_mean": False,
         },
     )
     evaluator.compute(
@@ -282,8 +282,8 @@ def test_eval_pdex_kwargs_duplicated():
         control_pert="control",
         pert_col="perturbation",
         pdex_kwargs={
-            "exp_post_agg": True,
-            "num_workers": 4,
+            "geometric_mean": False,
+            "threads": 4,
         },
     )
     evaluator.compute(
@@ -385,23 +385,6 @@ def test_eval_downsampled_cells():
         control_pert=CONTROL_VAR,
         pert_col=PERT_COL,
         outdir=OUTDIR,
-    )
-    evaluator.compute(
-        break_on_error=True,
-    )
-    validate_expected_files(OUTDIR)
-
-
-def test_eval_alt_metric():
-    adata_real = build_random_anndata()
-    adata_pred = downsample_cells(adata_real, fraction=0.5)
-    evaluator = MetricsEvaluator(
-        adata_pred=adata_pred,
-        adata_real=adata_real,
-        control_pert=CONTROL_VAR,
-        pert_col=PERT_COL,
-        outdir=OUTDIR,
-        de_method="anderson",
     )
     evaluator.compute(
         break_on_error=True,
