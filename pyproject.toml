@@ -17,6 +17,7 @@ dependencies = [
     "scanpy>=1.10.3",
     "pyarrow>=18.0.0",
     "tqdm>=4.67.1",
+    "anndata>=0.12.10",
 ]
 
 [build-system]
