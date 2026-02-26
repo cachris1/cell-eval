@@ -2,6 +2,7 @@ import logging
 
 import anndata as ad
 import numpy as np
+import scipy.sparse as sp
 from scipy.sparse import csc_matrix, csr_matrix
 
 logger = logging.getLogger(__name__)
@@ -105,3 +106,22 @@ def split_anndata_on_celltype(
         ct: adata[adata.obs[celltype_col] == ct]
         for ct in adata.obs[celltype_col].unique()
     }
+
+
+def _cast_float16_to_float32(adata: ad.AnnData, which: str | None = None):
+    """Cast float16 expression matrix to float32 (inplace).
+
+    NUMBA (used by pdex) does not support float16 operations.
+    """
+
+    x = adata.X
+    dtype = x.dtype if not sp.issparse(x) else x.data.dtype
+    if dtype == np.float16:
+        if which:
+            logger.info(
+                f"Casting {which} anndata from float16 to float32 (NUMBA does not support float16)."
+            )
+        if sp.issparse(x):
+            adata.X = x.astype(np.float32)
+        else:
+            adata.X = x.astype(np.float32)

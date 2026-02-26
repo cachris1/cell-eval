@@ -13,6 +13,7 @@ from cell_eval.utils import guess_is_lognorm
 
 from ._pipeline import MetricPipeline
 from ._types import PerturbationAnndataPair, initialize_de_comparison
+from .utils import _cast_float16_to_float32
 
 logger = logging.getLogger(__name__)
 
@@ -180,27 +181,6 @@ def _build_anndata_pair(
     return PerturbationAnndataPair(
         real=real, pred=pred, control_pert=control_pert, pert_col=pert_col
     )
-
-
-def _cast_float16_to_float32(adata: ad.AnnData, which: str | None = None):
-    """Cast float16 expression matrix to float32 (inplace).
-
-    NUMBA (used by pdex) does not support float16 operations.
-    """
-    import numpy as np
-    import scipy.sparse as sp
-
-    x = adata.X
-    dtype = x.dtype if not sp.issparse(x) else x.data.dtype
-    if dtype == np.float16:
-        if which:
-            logger.info(
-                f"Casting {which} anndata from float16 to float32 (NUMBA does not support float16)."
-            )
-        if sp.issparse(x):
-            adata.X = x.astype(np.float32)
-        else:
-            adata.X = x.astype(np.float32)
 
 
 def _convert_to_normlog(
