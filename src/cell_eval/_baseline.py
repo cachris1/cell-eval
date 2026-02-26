@@ -1,8 +1,9 @@
 import logging
-from typing import Any
+from typing import Any, cast
 
 import anndata as ad
 import numpy as np
+import pandas as pd
 import polars as pl
 from numpy.typing import NDArray
 from pdex import pdex
@@ -65,7 +66,7 @@ def build_base_mean_adata(
             (int(counts[counts_col].sum()), baseline.size),
             baseline,
         ),
-        var=adata.var,
+        var=cast(pd.DataFrame, adata.var),
         obs=obs,
     )
 
@@ -76,7 +77,7 @@ def build_base_mean_adata(
 
     if output_path is not None:
         logger.info(f"Saving baseline data to {output_path}")
-        baseline_adata.write_h5ad(output_path)
+        baseline_adata.write_h5ad(output_path)  # type: ignore[invalid-argument-type]
 
     if output_de_path is not None:
         logger.info("Calculating differential expression")
@@ -134,9 +135,9 @@ def _build_counts_df_from_adata(
         raise ValueError(
             f"Column '{pert_col}' not found in adata.obs: {adata.obs.columns}"
         )
-    if control_pert not in adata.obs[pert_col].unique():
+    if control_pert not in cast(pd.Series, adata.obs[pert_col]).unique():
         raise ValueError(
-            f"Control pert '{control_pert}' not found in adata.obs[{pert_col}]: {adata.obs[pert_col].unique()}"
+            f"Control pert '{control_pert}' not found in adata.obs[{pert_col}]: {cast(pd.Series, adata.obs[pert_col]).unique()}"
         )
     logger.info("Building counts DataFrame from adata")
     return (
@@ -158,7 +159,7 @@ def _build_pert_baseline(
         raise ValueError(
             f"Column '{pert_col}' not found in adata.obs: {adata.obs.columns}"
         )
-    unique_perts = adata.obs[pert_col].unique()
+    unique_perts = cast(pd.Series, adata.obs[pert_col]).unique()
     if control_pert not in unique_perts:
         raise ValueError(
             f"Control pert '{control_pert}' not found in unique_perts: {unique_perts}"
