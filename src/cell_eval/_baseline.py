@@ -23,9 +23,7 @@ def build_base_mean_adata(
     allow_discrete: bool = False,
     output_path: str | None = None,
     output_de_path: str | None = None,
-    batch_size: int = 1000,
     num_threads: int = 1,
-    de_method: str = "wilcoxon",
     pdex_kwargs: dict[str, Any] = {},
 ) -> ad.AnnData:
     if isinstance(adata, str):
