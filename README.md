@@ -61,6 +61,18 @@ cell-eval run \
     --profile full
 ```
 
+To evaluate mixed cell types in one pass, provide a cell-type key from `adata.obs`:
+
+```bash
+cell-eval run \
+    -ap <your/path/to/pred>.h5ad \
+    -ar <your/path/to/real>.h5ad \
+    --cell-type-key cell_type
+```
+
+This writes per-celltype outputs (prefixed by cell type) and merged outputs in the same
+`outdir` as `results.csv` and `agg_results.csv`.
+
 To run this as a python module you will need to use the `MetricsEvaluator` class.
 
 ```python

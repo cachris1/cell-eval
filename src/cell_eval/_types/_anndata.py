@@ -72,10 +72,6 @@ class PerturbationAnndataPair:
 
         perts_real = np.unique(self.real.obs[self.pert_col].to_numpy(str))
         perts_pred = np.unique(self.pred.obs[self.pert_col].to_numpy(str))
-        if not np.array_equal(perts_real, perts_pred):
-            raise ValueError(
-                f"Perturbation mismatch: real {perts_real} != pred {perts_pred}"
-            )
 
         if self.control_pert not in perts_real:
             raise ValueError(
@@ -86,8 +82,23 @@ class PerturbationAnndataPair:
                 f"Control perturbation ({self.control_pert}) not found in pred AnnData: {perts_pred}"
             )
 
-        perts = np.union1d(perts_real, perts_pred)
-        perts = np.array([p for p in perts if p != self.control_pert])
+        common_perts = np.intersect1d(perts_real, perts_pred)
+        if common_perts.size == 0:
+            raise ValueError(
+                "No overlapping perturbations were found between real and pred AnnData"
+            )
+
+        dropped_real = np.setdiff1d(perts_real, perts_pred)
+        dropped_pred = np.setdiff1d(perts_pred, perts_real)
+        if dropped_real.size > 0 or dropped_pred.size > 0:
+            logger.warning(
+                "Perturbation mismatch between real and pred AnnData. "
+                "Restricting paired metrics to shared perturbations. "
+                f"Dropped real-only perturbations: {dropped_real.tolist()} | "
+                f"dropped pred-only perturbations: {dropped_pred.tolist()}"
+            )
+
+        perts = np.array([p for p in common_perts if p != self.control_pert])
 
         pert_mask_real = self.pert_mask(
             self.real.obs[self.pert_col].to_numpy(str),
@@ -183,11 +194,7 @@ class PerturbationAnndataPair:
         if rebuilt:
             real_id = self.bulk_real[embed_key][0]
             pred_id = self.bulk_pred[embed_key][0]
-            if not np.array_equal(real_id, pred_id):
-                raise ValueError(
-                    f"Real and predicted embeddings are missing perturbations for {embed_key}"
-                )
-            if self.control_pert not in real_id:
+            if self.control_pert not in real_id or self.control_pert not in pred_id:
                 raise ValueError(
                     f"Control perturbation {self.control_pert} is missing in embeddings for {embed_key}"
                 )
@@ -201,14 +208,20 @@ class PerturbationAnndataPair:
         assert self.bulk_pred is not None, "Bulk pred data is missing"
 
         # Get the perturbation indices
-        pert_pos = np.flatnonzero(self.bulk_real[embed_key][0] == pert)[0]
-        ctrl_pos = np.flatnonzero(self.bulk_real[embed_key][0] == self.control_pert)[0]
+        pert_pos_real = np.flatnonzero(self.bulk_real[embed_key][0] == pert)[0]
+        pert_pos_pred = np.flatnonzero(self.bulk_pred[embed_key][0] == pert)[0]
+        ctrl_pos_real = np.flatnonzero(
+            self.bulk_real[embed_key][0] == self.control_pert
+        )[0]
+        ctrl_pos_pred = np.flatnonzero(
+            self.bulk_pred[embed_key][0] == self.control_pert
+        )[0]
         return BulkArrays(
             key=pert,
-            pert_real=self.bulk_real[embed_key][1][pert_pos],
-            pert_pred=self.bulk_pred[embed_key][1][pert_pos],
-            ctrl_real=self.bulk_real[embed_key][1][ctrl_pos],
-            ctrl_pred=self.bulk_pred[embed_key][1][ctrl_pos],
+            pert_real=self.bulk_real[embed_key][1][pert_pos_real],
+            pert_pred=self.bulk_pred[embed_key][1][pert_pos_pred],
+            ctrl_real=self.bulk_real[embed_key][1][ctrl_pos_real],
+            ctrl_pred=self.bulk_pred[embed_key][1][ctrl_pos_pred],
         )
 
     def build_cell_array(self, pert: str, embed_key: str | None = None) -> "CellArrays":

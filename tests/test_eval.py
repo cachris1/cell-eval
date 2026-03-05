@@ -407,3 +407,33 @@ def test_eval_alt_metric():
         break_on_error=True,
     )
     validate_expected_files(OUTDIR)
+
+
+def test_eval_with_baselines():
+    adata_real = build_random_anndata()
+    adata_pred = downsample_cells(adata_real, fraction=0.5)
+    evaluator = MetricsEvaluator(
+        adata_pred=adata_pred,
+        adata_real=adata_real,
+        control_pert=CONTROL_VAR,
+        pert_col=PERT_COL,
+        outdir=OUTDIR,
+    )
+    evaluator.compute(
+        break_on_error=True,
+        include_baselines=[
+            "pert-mean",
+            "cell-type-mean",
+            "nearest-cell-type-transfer",
+        ],
+    )
+
+    validate_expected_files(OUTDIR, remove=False)
+    assert os.path.exists(f"{OUTDIR}/pert-mean_results.csv")
+    assert os.path.exists(f"{OUTDIR}/pert-mean_agg_results.csv")
+    assert os.path.exists(f"{OUTDIR}/cell-type-mean_results.csv")
+    assert os.path.exists(f"{OUTDIR}/cell-type-mean_agg_results.csv")
+    assert os.path.exists(f"{OUTDIR}/nearest-cell-type-transfer_results.csv")
+    assert os.path.exists(f"{OUTDIR}/nearest-cell-type-transfer_agg_results.csv")
+    assert os.path.exists(f"{OUTDIR}/model_comparison_results.csv")
+    shutil.rmtree(OUTDIR)

@@ -196,13 +196,24 @@ class DEComparison:
     def __post_init__(self) -> None:
         real_perts = self.real.get_perts()
         pred_perts = self.pred.get_perts()
-        if not np.array_equal(real_perts, pred_perts):
+        common_perts = np.intersect1d(real_perts, pred_perts)
+        if common_perts.size == 0:
             raise ValueError(
-                f"Perturbation mismatch: real {real_perts} != pred {pred_perts}"
+                "No overlapping perturbations were found between real and pred DE results"
             )
 
-        object.__setattr__(self, "perturbations", list(real_perts))
-        object.__setattr__(self, "n_perts", len(real_perts))
+        dropped_real = np.setdiff1d(real_perts, pred_perts)
+        dropped_pred = np.setdiff1d(pred_perts, real_perts)
+        if dropped_real.size > 0 or dropped_pred.size > 0:
+            logger.warning(
+                "Perturbation mismatch between real and pred DE results. "
+                "Restricting DE metrics to shared perturbations. "
+                f"Dropped real-only perturbations: {dropped_real.tolist()} | "
+                f"dropped pred-only perturbations: {dropped_pred.tolist()}"
+            )
+
+        object.__setattr__(self, "perturbations", list(common_perts))
+        object.__setattr__(self, "n_perts", len(common_perts))
 
     def iter_perturbations(self) -> Iterator[str]:
         for pert in self.perturbations:
