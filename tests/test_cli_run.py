@@ -58,6 +58,62 @@ def _build_run_args(adata_pred: Path, adata_real: Path, outdir: Path) -> ap.Name
     )
 
 
+class DummyMetricsEvaluator:
+    def __init__(
+        self,
+        adata_pred: str,
+        adata_real: str,
+        outdir: str,
+        celltype_col: str | None = None,
+        prefix: str | None = None,
+        **_: object,
+    ) -> None:
+        self.adata_pred = ad.read_h5ad(adata_pred)
+        self.adata_real = ad.read_h5ad(adata_real)
+        self.outdir = Path(outdir)
+        self.celltype_col = celltype_col
+        self.prefix = prefix
+        os.makedirs(self.outdir, exist_ok=True)
+
+    def compute(
+        self,
+        basename: str = "results.csv",
+        **_: object,
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        if self.celltype_col is None:
+            results = pl.DataFrame({"perturbation": ["pert_1"], "dummy_metric": [1.0]})
+            agg_results = results.drop("perturbation").describe()
+            results.write_csv(self.outdir / basename)
+            agg_results.write_csv(self.outdir / f"agg_{basename}")
+            return results, agg_results
+
+        real_ct = set(self.adata_real.obs[self.celltype_col].to_numpy(str))
+        pred_ct = set(self.adata_pred.obs[self.celltype_col].to_numpy(str))
+        assert pred_ct.issubset(real_ct)
+
+        frames: list[pl.DataFrame] = []
+        for ct in sorted(pred_ct):
+            ct_frame = pl.DataFrame(
+                {
+                    "perturbation": ["pert_1"],
+                    "dummy_metric": [float(self.adata_pred.n_obs)],
+                    self.celltype_col: [ct],
+                }
+            )
+            frames.append(ct_frame)
+            ct_no_context = ct_frame.drop(self.celltype_col)
+            ct_no_context.write_csv(self.outdir / f"{ct}_{basename}")
+            ct_no_context.drop("perturbation").describe().write_csv(
+                self.outdir / f"{ct}_agg_{basename}"
+            )
+
+        merged_results = pl.concat(frames, how="diagonal_relaxed")
+        merged_agg = merged_results.drop("perturbation", self.celltype_col).describe()
+        merged_results.write_csv(self.outdir / basename)
+        merged_agg.write_csv(self.outdir / f"agg_{basename}")
+        return merged_results, merged_agg
+
+
 def test_run_evaluation_celltype_split_writes_merged_outputs(tmp_path: Path):
     adata_real = _build_multicelltype_adata()
     adata_pred = adata_real.copy()
@@ -68,49 +124,6 @@ def test_run_evaluation_celltype_split_writes_merged_outputs(tmp_path: Path):
 
     adata_real.write_h5ad(adata_real_path)
     adata_pred.write_h5ad(adata_pred_path)
-
-    class DummyMetricsEvaluator:
-        def __init__(
-            self,
-            adata_pred: ad.AnnData,
-            adata_real: ad.AnnData,
-            outdir: str,
-            prefix: str | None = None,
-            **_: object,
-        ) -> None:
-            self.adata_pred = adata_pred
-            self.adata_real = adata_real
-            self.outdir = outdir
-            self.prefix = prefix
-            os.makedirs(self.outdir, exist_ok=True)
-
-        def compute(
-            self,
-            basename: str = "results.csv",
-            **_: object,
-        ) -> tuple[pl.DataFrame, pl.DataFrame]:
-            metric_value = float(self.adata_real.n_obs)
-            results = pl.DataFrame(
-                {
-                    "perturbation": ["pert_1"],
-                    "dummy_metric": [metric_value],
-                }
-            )
-            agg_results = results.drop("perturbation").describe()
-
-            outpath = (
-                outdir / f"{self.prefix}_{basename}"
-                if self.prefix
-                else outdir / basename
-            )
-            agg_outpath = (
-                outdir / f"{self.prefix}_agg_{basename}"
-                if self.prefix
-                else outdir / f"agg_{basename}"
-            )
-            results.write_csv(outpath)
-            agg_results.write_csv(agg_outpath)
-            return results, agg_results
 
     original_evaluator = cell_eval.MetricsEvaluator
     cell_eval.MetricsEvaluator = DummyMetricsEvaluator
@@ -146,47 +159,6 @@ def test_run_evaluation_allows_extra_real_celltypes(tmp_path: Path):
 
     adata_real.write_h5ad(adata_real_path)
     adata_pred.write_h5ad(adata_pred_path)
-
-    class DummyMetricsEvaluator:
-        def __init__(
-            self,
-            adata_pred: ad.AnnData,
-            adata_real: ad.AnnData,
-            outdir: str,
-            prefix: str | None = None,
-            **_: object,
-        ) -> None:
-            self.adata_pred = adata_pred
-            self.adata_real = adata_real
-            self.outdir = outdir
-            self.prefix = prefix
-            os.makedirs(self.outdir, exist_ok=True)
-
-        def compute(
-            self,
-            basename: str = "results.csv",
-            **_: object,
-        ) -> tuple[pl.DataFrame, pl.DataFrame]:
-            results = pl.DataFrame(
-                {
-                    "perturbation": ["pert_1"],
-                    "dummy_metric": [float(self.adata_pred.n_obs)],
-                }
-            )
-            agg_results = results.drop("perturbation").describe()
-            outpath = (
-                outdir / f"{self.prefix}_{basename}"
-                if self.prefix
-                else outdir / basename
-            )
-            agg_outpath = (
-                outdir / f"{self.prefix}_agg_{basename}"
-                if self.prefix
-                else outdir / f"agg_{basename}"
-            )
-            results.write_csv(outpath)
-            agg_results.write_csv(agg_outpath)
-            return results, agg_results
 
     original_evaluator = cell_eval.MetricsEvaluator
     cell_eval.MetricsEvaluator = DummyMetricsEvaluator

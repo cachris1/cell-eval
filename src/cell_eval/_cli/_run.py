@@ -3,8 +3,6 @@ import importlib.metadata
 import logging
 import os
 
-import polars as pl
-
 from .. import KNOWN_PROFILES
 from ._const import (
     DEFAULT_CELLTYPE_COL,
@@ -156,25 +154,8 @@ def build_outdir(outdir: str):
     os.makedirs(outdir, exist_ok=True)
 
 
-def _compute_merged_aggregate(
-    merged_results: pl.DataFrame,
-    celltype_col: str,
-) -> pl.DataFrame:
-    metric_columns = [
-        col
-        for col in merged_results.columns
-        if col not in {"perturbation", celltype_col}
-    ]
-    if not metric_columns:
-        return pl.DataFrame()
-    return merged_results.select(metric_columns).describe()
-
-
 def run_evaluation(args: ap.Namespace):
-    import anndata as ad
-
     from cell_eval import MetricsEvaluator
-    from cell_eval.utils import split_anndata_on_celltype
 
     # Set metric config for embed key if provided
     metric_kwargs = (
@@ -196,90 +177,26 @@ def run_evaluation(args: ap.Namespace):
     }
     baselines = [b for b in baselines if b in valid_baselines]
 
-    if args.celltype_col is not None:
-        real = ad.read_h5ad(args.adata_real)
-        pred = ad.read_h5ad(args.adata_pred)
-
-        real_split = split_anndata_on_celltype(real, args.celltype_col)
-        pred_split = split_anndata_on_celltype(pred, args.celltype_col)
-
-        real_celltypes = set(real_split.keys())
-        pred_celltypes = set(pred_split.keys())
-        missing_in_real = sorted(pred_celltypes - real_celltypes)
-        if missing_in_real:
-            raise ValueError(
-                "adata_pred contains cell types that are missing in adata_real for "
-                f"'{args.celltype_col}': {missing_in_real}"
-            )
-        extra_in_real = sorted(real_celltypes - pred_celltypes)
-        if extra_in_real:
-            logger.warning(
-                "Ignoring cell types present only in adata_real for '%s': %s",
-                args.celltype_col,
-                extra_in_real,
-            )
-
-        merged_results_by_celltype: list[pl.DataFrame] = []
-        for ct in sorted(pred_celltypes):
-            real_ct = real_split[ct]
-            pred_ct = pred_split[ct]
-
-            evaluator = MetricsEvaluator(
-                adata_pred=pred_ct,
-                adata_real=real_ct,
-                de_pred=args.de_pred,
-                de_real=args.de_real,
-                control_pert=args.control_pert,
-                pert_col=args.pert_col,
-                de_method=args.de_method,
-                num_threads=args.num_threads,
-                batch_size=args.batch_size,
-                outdir=args.outdir,
-                allow_discrete=args.allow_discrete,
-                prefix=ct,
-                skip_de=args.profile == "pds",
-            )
-            results, _ = evaluator.compute(
-                profile=args.profile,
-                metric_configs=metric_kwargs,
-                skip_metrics=skip_metrics,
-                basename="results.csv",
-                include_baselines=baselines or None,
-                baseline_celltype_col=args.baseline_celltype_col,
-            )
-            merged_results_by_celltype.append(
-                results.with_columns(pl.lit(ct).alias(args.celltype_col))
-            )
-
-        merged_results = pl.concat(merged_results_by_celltype, how="diagonal_relaxed")
-        merged_agg = _compute_merged_aggregate(merged_results, args.celltype_col)
-        merged_results_outpath = os.path.join(args.outdir, "results.csv")
-        merged_agg_outpath = os.path.join(args.outdir, "agg_results.csv")
-        logger.info(f"Writing merged perturbation level metrics to {merged_results_outpath}")
-        merged_results.write_csv(merged_results_outpath)
-        logger.info(f"Writing merged aggregate metrics to {merged_agg_outpath}")
-        merged_agg.write_csv(merged_agg_outpath)
-
-    else:
-        evaluator = MetricsEvaluator(
-            adata_pred=args.adata_pred,
-            adata_real=args.adata_real,
-            de_pred=args.de_pred,
-            de_real=args.de_real,
-            control_pert=args.control_pert,
-            pert_col=args.pert_col,
-            de_method=args.de_method,
-            num_threads=args.num_threads,
-            batch_size=args.batch_size,
-            outdir=args.outdir,
-            allow_discrete=args.allow_discrete,
-            skip_de=args.profile == "pds",
-        )
-        evaluator.compute(
-            profile=args.profile,
-            metric_configs=metric_kwargs,
-            skip_metrics=skip_metrics,
-            basename="results.csv",
-            include_baselines=baselines or None,
-            baseline_celltype_col=args.baseline_celltype_col,
-        )
+    evaluator = MetricsEvaluator(
+        adata_pred=args.adata_pred,
+        adata_real=args.adata_real,
+        de_pred=args.de_pred,
+        de_real=args.de_real,
+        control_pert=args.control_pert,
+        pert_col=args.pert_col,
+        de_method=args.de_method,
+        num_threads=args.num_threads,
+        batch_size=args.batch_size,
+        outdir=args.outdir,
+        allow_discrete=args.allow_discrete,
+        celltype_col=args.celltype_col,
+        skip_de=args.profile == "pds",
+    )
+    evaluator.compute(
+        profile=args.profile,
+        metric_configs=metric_kwargs,
+        skip_metrics=skip_metrics,
+        basename="results.csv",
+        include_baselines=baselines or None,
+        baseline_celltype_col=args.baseline_celltype_col,
+    )

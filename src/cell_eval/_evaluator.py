@@ -17,7 +17,7 @@ from scipy.stats import pearsonr, spearmanr
 from cell_eval.utils import guess_is_lognorm
 
 from ._pipeline import MetricPipeline
-from ._types import PerturbationAnndataPair, initialize_de_comparison
+from ._types import DEComparison, PerturbationAnndataPair, initialize_de_comparison
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,8 @@ class MetricsEvaluator:
         Control perturbation name.
     pert_col: str = "target"
         Perturbation column name.
+    celltype_col: str | None = None
+        Optional cell-type column in `adata.obs` used to split evaluation context.
     de_method: str = "wilcoxon"
         Differential expression method.
     num_threads: int = -1
@@ -90,6 +92,7 @@ class MetricsEvaluator:
         outdir: str = "./cell-eval-outdir",
         allow_discrete: bool = False,
         prefix: str | None = None,
+        celltype_col: str | None = None,
         pdex_kwargs: dict[str, Any] | None = None,
         skip_de: bool = False,
     ):
@@ -110,21 +113,30 @@ class MetricsEvaluator:
             allow_discrete=allow_discrete,
         )
 
-        if skip_de:
-            self.de_comparison = None
-        else:
-            self.de_comparison = _build_de_comparison(
-                anndata_pair=self.anndata_pair,
-                de_pred=de_pred,
-                de_real=de_real,
-                de_method=de_method,
-                num_threads=num_threads if num_threads != -1 else mp.cpu_count(),
-                batch_size=batch_size,
-                allow_discrete=allow_discrete,
-                outdir=outdir,
-                prefix=prefix,
-                pdex_kwargs=pdex_kwargs or {},
+        if celltype_col is not None and (de_pred is not None or de_real is not None):
+            raise ValueError(
+                "de_pred/de_real are not supported when using celltype_col splitting; "
+                "run with raw anndata inputs so DE can be computed per cell type."
             )
+
+        if celltype_col is None:
+            if skip_de:
+                self.de_comparison = None
+            else:
+                self.de_comparison = _build_de_comparison(
+                    anndata_pair=self.anndata_pair,
+                    de_pred=de_pred,
+                    de_real=de_real,
+                    de_method=de_method,
+                    num_threads=num_threads if num_threads != -1 else mp.cpu_count(),
+                    batch_size=batch_size,
+                    allow_discrete=allow_discrete,
+                    outdir=outdir,
+                    prefix=prefix,
+                    pdex_kwargs=pdex_kwargs or {},
+                )
+        else:
+            self.de_comparison = None
 
         self.outdir = outdir
         self.prefix = prefix
@@ -136,6 +148,128 @@ class MetricsEvaluator:
         self.allow_discrete = allow_discrete
         self.pdex_kwargs = pdex_kwargs or {}
         self.model_comparison: pl.DataFrame | None = None
+        self.celltype_col = celltype_col
+        self.skip_de = skip_de
+        self._contexts: list[tuple[str | None, PerturbationAnndataPair, DEComparison | None]] = []
+
+        if celltype_col is None:
+            self._contexts.append((None, self.anndata_pair, self.de_comparison))
+        else:
+            self._contexts = self._build_contexts(
+                celltype_col=celltype_col,
+                de_method=de_method,
+            )
+
+    def _build_contexts(
+        self,
+        celltype_col: str,
+        de_method: str,
+    ) -> list[tuple[str | None, PerturbationAnndataPair, DEComparison | None]]:
+        if celltype_col not in self.anndata_pair.real.obs.columns:
+            raise ValueError(
+                f"Celltype column '{celltype_col}' missing in adata_real.obs"
+            )
+        if celltype_col not in self.anndata_pair.pred.obs.columns:
+            raise ValueError(
+                f"Celltype column '{celltype_col}' missing in adata_pred.obs"
+            )
+
+        real_celltypes = set(self.anndata_pair.real.obs[celltype_col].to_numpy(str))
+        pred_celltypes = set(self.anndata_pair.pred.obs[celltype_col].to_numpy(str))
+        missing_in_real = sorted(pred_celltypes - real_celltypes)
+        if missing_in_real:
+            raise ValueError(
+                "adata_pred contains cell types that are missing in adata_real for "
+                f"'{celltype_col}': {missing_in_real}"
+            )
+
+        extra_in_real = sorted(real_celltypes - pred_celltypes)
+        if extra_in_real:
+            logger.warning(
+                "Ignoring cell types present only in adata_real for '%s': %s",
+                celltype_col,
+                extra_in_real,
+            )
+
+        contexts: list[tuple[str | None, PerturbationAnndataPair, DEComparison | None]] = []
+        for ct in sorted(pred_celltypes):
+            real_ct = self.anndata_pair.real[
+                self.anndata_pair.real.obs[celltype_col].to_numpy(str) == ct
+            ].copy()
+            pred_ct = self.anndata_pair.pred[
+                self.anndata_pair.pred.obs[celltype_col].to_numpy(str) == ct
+            ].copy()
+            pair = PerturbationAnndataPair(
+                real=real_ct,
+                pred=pred_ct,
+                control_pert=self.control_pert,
+                pert_col=self.pert_col,
+            )
+            de_comparison = (
+                None
+                if self.skip_de
+                else _build_de_comparison(
+                    anndata_pair=pair,
+                    de_method=de_method,
+                    num_threads=self.num_threads,
+                    batch_size=self.batch_size,
+                    allow_discrete=self.allow_discrete,
+                    outdir=self.outdir,
+                    prefix=self._build_context_prefix(ct),
+                    pdex_kwargs=self.pdex_kwargs,
+                )
+            )
+            contexts.append((ct, pair, de_comparison))
+
+        return contexts
+
+    def _build_context_prefix(self, context: str | None) -> str | None:
+        if context is None:
+            return self.prefix
+        if self.prefix:
+            return f"{self.prefix}_{context}"
+        return context
+
+    @staticmethod
+    def _sanitize_name(value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.replace("/", "-")
+
+    def _build_output_paths(
+        self,
+        basename: str,
+        prefix: str | None,
+    ) -> tuple[str, str]:
+        sanitized_basename = self._sanitize_name(basename) or "results.csv"
+        sanitized_prefix = self._sanitize_name(prefix)
+        outpath = os.path.join(
+            self.outdir,
+            f"{sanitized_prefix}_{sanitized_basename}"
+            if sanitized_prefix
+            else sanitized_basename,
+        )
+        agg_outpath = os.path.join(
+            self.outdir,
+            f"{sanitized_prefix}_agg_{sanitized_basename}"
+            if sanitized_prefix
+            else f"agg_{sanitized_basename}",
+        )
+        return outpath, agg_outpath
+
+    @staticmethod
+    def _compute_merged_aggregate(
+        merged_results: pl.DataFrame,
+        celltype_col: str,
+    ) -> pl.DataFrame:
+        metric_columns = [
+            col
+            for col in merged_results.columns
+            if col not in {"perturbation", celltype_col}
+        ]
+        if not metric_columns:
+            return pl.DataFrame()
+        return merged_results.select(metric_columns).describe()
 
     def compute(
         self,
@@ -151,44 +285,8 @@ class MetricsEvaluator:
         | None = None,
         baseline_celltype_col: str = "celltype",
     ) -> tuple[pl.DataFrame, pl.DataFrame]:
-        pipeline = MetricPipeline(
-            profile=profile,
-            metric_configs=metric_configs,
-            break_on_error=break_on_error,
-        )
-        if skip_metrics is not None:
-            pipeline.skip_metrics(skip_metrics)
-        pipeline.compute_de_metrics(self.de_comparison)
-        pipeline.compute_anndata_metrics(self.anndata_pair)
-        results = pipeline.get_results()
-        agg_results = pipeline.get_agg_results()
-
-        if write_csv:
-            if self.prefix is not None:
-                self.prefix = self.prefix.replace(
-                    "/", "-"
-                )  # some prefixes (e.g. HepG2/C3A) may have slashes in them
-            if basename is not None:
-                basename = basename.replace(
-                    "/", "-"
-                )  # some basenames (e.g. HepG2/C3A_results.csv) may have slashes in them
-            outpath = os.path.join(
-                self.outdir,
-                f"{self.prefix}_{basename}" if self.prefix else basename,
-            )
-            agg_outpath = os.path.join(
-                self.outdir,
-                f"{self.prefix}_agg_{basename}" if self.prefix else f"agg_{basename}",
-            )
-
-            logger.info(f"Writing perturbation level metrics to {outpath}")
-            results.write_csv(outpath)
-
-            logger.info(f"Writing aggregate metrics to {agg_outpath}")
-            agg_results.write_csv(agg_outpath)
-        
-        if include_baselines:
-            baseline_agg_results = self._compute_baselines(
+        if self.celltype_col is None:
+            return self.compute_runner(
                 profile=profile,
                 metric_configs=metric_configs,
                 skip_metrics=skip_metrics,
@@ -197,18 +295,124 @@ class MetricsEvaluator:
                 break_on_error=break_on_error,
                 include_baselines=include_baselines,
                 baseline_celltype_col=baseline_celltype_col,
+                anndata_pair=self.anndata_pair,
+                de_comparison=self.de_comparison,
+                prefix=self.prefix,
             )
+
+        merged_results_by_context: list[pl.DataFrame] = []
+        for context, pair, de_comparison in self._contexts:
+            context_prefix = self._build_context_prefix(context)
+            context_results, _ = self.compute_runner(
+                profile=profile,
+                metric_configs=metric_configs,
+                skip_metrics=skip_metrics,
+                basename=basename,
+                write_csv=write_csv,
+                break_on_error=break_on_error,
+                include_baselines=include_baselines,
+                baseline_celltype_col=baseline_celltype_col,
+                anndata_pair=pair,
+                de_comparison=de_comparison,
+                prefix=context_prefix,
+            )
+            merged_results_by_context.append(
+                context_results.with_columns(
+                    pl.lit(context).alias(self.celltype_col)
+                )
+            )
+
+        merged_results = pl.concat(merged_results_by_context, how="diagonal_relaxed")
+        merged_agg = self._compute_merged_aggregate(merged_results, self.celltype_col)
+        if write_csv:
+            outpath, agg_outpath = self._build_output_paths(
+                basename=basename,
+                prefix=self.prefix,
+            )
+            logger.info(f"Writing merged perturbation level metrics to {outpath}")
+            merged_results.write_csv(outpath)
+            logger.info(f"Writing merged aggregate metrics to {agg_outpath}")
+            merged_agg.write_csv(agg_outpath)
+
+        return merged_results, merged_agg
+
+    def compute_runner(
+        self,
+        profile: Literal["full", "vcc", "minimal", "de", "anndata"] = "full",
+        metric_configs: dict[str, dict[str, Any]] | None = None,
+        skip_metrics: list[str] | None = None,
+        basename: str = "results.csv",
+        write_csv: bool = True,
+        break_on_error: bool = False,
+        include_baselines: list[
+            Literal["pert-mean", "cell-type-mean", "nearest-cell-type-transfer"]
+        ]
+        | None = None,
+        baseline_celltype_col: str = "celltype",
+        anndata_pair: PerturbationAnndataPair | None = None,
+        de_comparison: DEComparison | None = None,
+        prefix: str | None = None,
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        anndata_pair = anndata_pair or self.anndata_pair
+        de_comparison = self.de_comparison if de_comparison is None else de_comparison
+        pipeline = MetricPipeline(
+            profile=profile,
+            metric_configs=metric_configs,
+            break_on_error=break_on_error,
+        )
+        if skip_metrics is not None:
+            pipeline.skip_metrics(skip_metrics)
+        pipeline.compute_de_metrics(de_comparison)
+        pipeline.compute_anndata_metrics(anndata_pair)
+        results = pipeline.get_results()
+        agg_results = pipeline.get_agg_results()
+
+        if write_csv:
+            outpath, agg_outpath = self._build_output_paths(
+                basename=basename,
+                prefix=prefix,
+            )
+            logger.info(f"Writing perturbation level metrics to {outpath}")
+            results.write_csv(outpath)
+
+            logger.info(f"Writing aggregate metrics to {agg_outpath}")
+            agg_results.write_csv(agg_outpath)
+
+        if include_baselines:
+            prev_pair = self.anndata_pair
+            prev_de = self.de_comparison
+            prev_prefix = self.prefix
+            try:
+                self.anndata_pair = anndata_pair
+                self.de_comparison = de_comparison
+                self.prefix = prefix
+                baseline_agg_results = self._compute_baselines(
+                    profile=profile,
+                    metric_configs=metric_configs,
+                    skip_metrics=skip_metrics,
+                    basename=basename,
+                    write_csv=write_csv,
+                    break_on_error=break_on_error,
+                    include_baselines=include_baselines,
+                    baseline_celltype_col=baseline_celltype_col,
+                )
+            finally:
+                self.anndata_pair = prev_pair
+                self.de_comparison = prev_de
+                self.prefix = prev_prefix
             self.model_comparison = _build_model_comparison_table(
                 pred_agg=agg_results,
                 baseline_aggs=baseline_agg_results,
             )
             if write_csv and self.model_comparison is not None:
+                model_prefix = self._sanitize_name(prefix)
+                model_basename = self._sanitize_name(basename) or "results.csv"
                 model_outpath = os.path.join(
                     self.outdir,
                     (
-                        f"{self.prefix}_model_comparison_{basename}"
-                        if self.prefix
-                        else f"model_comparison_{basename}"
+                        f"{model_prefix}_model_comparison_{model_basename}"
+                        if model_prefix
+                        else f"model_comparison_{model_basename}"
                     ),
                 )
                 logger.info(f"Writing model comparison metrics to {model_outpath}")
