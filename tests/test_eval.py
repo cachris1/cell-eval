@@ -3,9 +3,11 @@ import shutil
 from typing import Literal
 
 import numpy as np
+import polars as pl
 import pytest
 
 from cell_eval import MetricsEvaluator
+from cell_eval._evaluator import _append_baseline_effect_metrics
 from cell_eval.data import (
     CONTROL_VAR,
     PERT_COL,
@@ -437,3 +439,65 @@ def test_eval_with_baselines():
     assert os.path.exists(f"{OUTDIR}/nearest-cell-type-transfer_agg_results.csv")
     assert os.path.exists(f"{OUTDIR}/model_comparison_results.csv")
     shutil.rmtree(OUTDIR)
+
+
+def test_eval_with_baselines_and_context_split_has_pert_mean_outputs():
+    adata_real = build_random_anndata()
+    adata_pred = downsample_cells(adata_real, fraction=0.5)
+
+    # Split by sample/context in a way that leaves each context with only one
+    # celltype, which previously caused pert-mean to be skipped.
+    adata_real.obs["sample"] = np.where(
+        np.arange(adata_real.n_obs) % 2 == 0, "ctx_a", "ctx_b"
+    )
+    adata_pred.obs["sample"] = np.where(
+        np.arange(adata_pred.n_obs) % 2 == 0, "ctx_a", "ctx_b"
+    )
+
+    evaluator = MetricsEvaluator(
+        adata_pred=adata_pred,
+        adata_real=adata_real,
+        control_pert=CONTROL_VAR,
+        pert_col=PERT_COL,
+        outdir=OUTDIR,
+        celltype_col="sample",
+    )
+    evaluator.compute(
+        break_on_error=True,
+        include_baselines=[
+            "pert-mean",
+            "cell-type-mean",
+            "nearest-cell-type-transfer",
+        ],
+        baseline_celltype_col="sample",
+    )
+
+    validate_expected_files(OUTDIR, remove=False)
+    assert os.path.exists(f"{OUTDIR}/ctx_a_pert-mean_results.csv")
+    assert os.path.exists(f"{OUTDIR}/ctx_b_pert-mean_results.csv")
+    shutil.rmtree(OUTDIR)
+
+
+def test_baseline_effect_metrics_include_discrimination_scores():
+    genes = np.array(["g1", "g2"])
+    de_real = pl.DataFrame(
+        {
+            "target": ["p1", "p1", "p2", "p2"],
+            "feature": ["g1", "g2", "g1", "g2"],
+            "fold_change": [2.0, 1.0, 1.0, 2.0],
+            "p_value": [0.5, 0.5, 0.5, 0.5],
+            "fdr": [0.5, 0.5, 0.5, 0.5],
+        }
+    )
+    de_pred = de_real.clone()
+
+    out = _append_baseline_effect_metrics(
+        baseline_results=pl.DataFrame({"perturbation": ["p1", "p2"]}),
+        de_real=de_real,
+        de_pred=de_pred,
+        genes=genes,
+    )
+
+    assert "discrimination_score_l1" in out.columns
+    assert "discrimination_score_l2" in out.columns
+    assert "discrimination_score_cosine" in out.columns

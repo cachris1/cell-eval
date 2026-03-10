@@ -150,6 +150,8 @@ class MetricsEvaluator:
         self.model_comparison: pl.DataFrame | None = None
         self.celltype_col = celltype_col
         self.skip_de = skip_de
+        # Preserve the full pair so some baselines can be computed pre-split.
+        self._global_anndata_pair = self.anndata_pair
         self._contexts: list[tuple[str | None, PerturbationAnndataPair, DEComparison | None]] = []
 
         if celltype_col is None:
@@ -445,18 +447,31 @@ class MetricsEvaluator:
 
         for baseline_name in include_baselines:
             if baseline_name == "pert-mean":
+                # Compute pert-mean from the full real dataset before context splitting.
+                # This keeps donor information available even when each split has only one
+                # context value.
+                pert_mean_source_real = (
+                    self._global_anndata_pair.real
+                    if self.celltype_col is not None
+                    else self.anndata_pair.real
+                )
+                pert_mean_celltype_col = None
+                if baseline_celltype_col in pert_mean_source_real.obs.columns:
+                    n_unique_celltypes = int(
+                        pert_mean_source_real.obs[baseline_celltype_col].astype(str).nunique()
+                    )
+                    # In per-context splits there may be only one celltype; donor-based
+                    # pert-mean is undefined there, so fall back to global pert-mean.
+                    if n_unique_celltypes > 1:
+                        pert_mean_celltype_col = baseline_celltype_col
                 baseline_de_tables[baseline_name] = _load_or_build_baseline_de(
                     baseline_name=baseline_name,
-                    adata_real=self.anndata_pair.real,
+                    adata_real=pert_mean_source_real,
                     pert_col=self.pert_col,
                     control_pert=self.control_pert,
                     genes=genes,
                     cache_dir=cache_dir,
-                    celltype_col=(
-                        baseline_celltype_col
-                        if baseline_celltype_col in self.anndata_pair.real.obs.columns
-                        else None
-                    ),
+                    celltype_col=pert_mean_celltype_col,
                 )
             elif baseline_name == "cell-type-mean":
                 if baseline_celltype_col not in self.anndata_pair.real.obs.columns:
@@ -1117,6 +1132,21 @@ def _append_baseline_effect_metrics(
 ) -> pl.DataFrame:
     real_delta = _de_to_delta_map(de_real, genes)
     pred_delta = _de_to_delta_map(de_pred, genes)
+    discrim_l1 = _discrimination_from_delta_maps(
+        real_delta=real_delta,
+        pred_delta=pred_delta,
+        metric="l1",
+    )
+    discrim_l2 = _discrimination_from_delta_maps(
+        real_delta=real_delta,
+        pred_delta=pred_delta,
+        metric="l2",
+    )
+    discrim_cos = _discrimination_from_delta_maps(
+        real_delta=real_delta,
+        pred_delta=pred_delta,
+        metric="cosine",
+    )
 
     rows: list[dict[str, float | str]] = []
     for pert in sorted(set(real_delta) & set(pred_delta)):
@@ -1130,6 +1160,9 @@ def _append_baseline_effect_metrics(
                 "spearman_effect_size": _safe_corr(
                     spearmanr, np.abs(x), np.abs(y)
                 ),
+                "discrimination_score_l1": discrim_l1.get(pert, 0.0),
+                "discrimination_score_l2": discrim_l2.get(pert, 0.0),
+                "discrimination_score_cosine": discrim_cos.get(pert, 0.0),
             }
         )
 
@@ -1172,6 +1205,55 @@ def _safe_corr(
         return value
     except Exception:
         return 0.0
+
+
+def _discrimination_from_delta_maps(
+    real_delta: dict[str, np.ndarray],
+    pred_delta: dict[str, np.ndarray],
+    metric: Literal["l1", "l2", "cosine"],
+) -> dict[str, float]:
+    common_perts = sorted(set(real_delta) & set(pred_delta))
+    if not common_perts:
+        return {}
+
+    n_perts = len(common_perts)
+    if n_perts == 1:
+        return {common_perts[0]: 1.0}
+
+    real_mat = np.vstack([real_delta[p] for p in common_perts])
+    pred_mat = np.vstack([pred_delta[p] for p in common_perts])
+
+    out: dict[str, float] = {}
+    for idx, pert in enumerate(common_perts):
+        query = pred_mat[idx]
+        distances = np.array(
+            [_vector_distance(query, real_mat[j], metric=metric) for j in range(n_perts)],
+            dtype=np.float64,
+        )
+        sorted_idx = np.argsort(distances, kind="stable")
+        rank = int(np.where(sorted_idx == idx)[0][0])
+        out[pert] = 1.0 - (rank / n_perts)
+    return out
+
+
+def _vector_distance(
+    x: np.ndarray,
+    y: np.ndarray,
+    metric: Literal["l1", "l2", "cosine"],
+) -> float:
+    if metric == "l1":
+        return float(np.abs(x - y).sum())
+    if metric == "l2":
+        return float(np.linalg.norm(x - y))
+    if metric == "cosine":
+        x_norm = float(np.linalg.norm(x))
+        y_norm = float(np.linalg.norm(y))
+        if x_norm == 0.0 and y_norm == 0.0:
+            return 0.0
+        if x_norm == 0.0 or y_norm == 0.0:
+            return 1.0
+        return float(1.0 - (np.dot(x, y) / (x_norm * y_norm)))
+    raise ValueError(f"Unsupported metric: {metric}")
 
 
 def _extract_mean_row(agg: pl.DataFrame, label: str) -> pl.DataFrame:
